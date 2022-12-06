@@ -1,5 +1,7 @@
 ## Telegram bot for channel feedback
 
+This bot will forward any incoming messages to selected chat (private, group or channel)
+
 ### Run using docker:
 
 ```shell
