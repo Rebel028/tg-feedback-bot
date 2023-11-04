@@ -16,6 +16,9 @@ var bot *botApi.BotAPI
 var forwardMessagesTo int64
 var confirmReceive bool = false
 
+// cache to handle mediagroups
+var cache = make(map[string]*MediaGroupData)
+
 func initializeBot(token string) {
 	//token := os.Getenv("BOT_TOKEN")
 	BotAPI, err := botApi.NewBotAPI(token)
@@ -59,6 +62,10 @@ func main() {
 		if update.Message.Chat.ID == forwardMessagesTo {
 			// todo: handle replies
 			continue
+		}
+
+		if update.Message.MediaGroupID != "" {
+			HandleMediaGroup(&cache, update.Message)
 		}
 
 		forwardedMsg := botApi.NewForward(forwardMessagesTo, update.Message.From.ID, update.Message.MessageID)
