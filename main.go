@@ -94,6 +94,8 @@ func ForwardMessage(c tele.Context) error {
 
 func HandleAlbum(b *tele.Bot, c tele.Context, mediaGroupId string) {
 	media := c.Message().Media()
+	log.Printf("Adding file to arr: %s", media.MediaFile().FileID)
+
 	if messages, ok := mediaGroups[mediaGroupId]; ok {
 		mediaGroups[mediaGroupId] = append(messages, media)
 	} else {
@@ -140,16 +142,16 @@ func CreateMedia(media tele.Media, caption string) tele.Inputtable {
 func ParseConfigParams() ConfigParams {
 	str := flag.String("token", os.Getenv("BOT_TOKEN"), "Telegram bot token")
 	forwardMessagesToStr := flag.String("chatid", os.Getenv("CHAT_ID"), "Chat Id to forward messages to")
-	confirmReceive := *flag.Bool("confirmreceive", false, "Confirm message received to each user")
-	useLogger := *flag.Bool("uselogger", false, "Use verbose logger")
+	confirmReceive := flag.Bool("confirmreceive", false, "Confirm message received to each user")
+	useLogger := flag.Bool("uselogger", false, "Use verbose logger")
 	flag.Parse()
 
 	forwardMessagesTo := ParseInt(*forwardMessagesToStr)
 	config := ConfigParams{
 		botToken:          *str,
 		forwardMessagesTo: forwardMessagesTo,
-		confirmReceive:    confirmReceive,
-		useLogger:         useLogger,
+		confirmReceive:    *confirmReceive,
+		useLogger:         *useLogger,
 	}
 	return config
 }
