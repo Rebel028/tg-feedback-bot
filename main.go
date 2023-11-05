@@ -2,86 +2,158 @@ package main
 
 import (
 	"flag"
+	"fmt"
+	"gopkg.in/telebot.v3/middleware"
 	"log"
 	"os"
 	"strconv"
+	"time"
 
-	botApi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
+	tele "gopkg.in/telebot.v3"
 )
 
-// bot instance
-var bot *botApi.BotAPI
+var b *tele.Bot
 
-// forward messages to
-var forwardMessagesTo int64
+var forwardTo *tele.Chat
 var confirmReceive bool = false
 
-func initializeBot(token string) {
-	//token := os.Getenv("BOT_TOKEN")
-	BotAPI, err := botApi.NewBotAPI(token)
+var mediaGroups = make(map[string][]tele.Media, 3)
 
-	if err != nil {
-		log.Panic(err)
+type ConfigParams struct {
+	botToken          string
+	forwardMessagesTo int64
+	confirmReceive    bool
+	useLogger         bool
+}
+
+func initializeBot(token string) *tele.Bot {
+
+	pref := tele.Settings{
+		Token:  token,
+		Poller: &tele.LongPoller{Timeout: 10 * time.Second},
 	}
 
-	bot = BotAPI
+	bot, err := tele.NewBot(pref)
+	if err != nil {
+		log.Fatal(err)
+	}
+	return bot
 }
 
 func main() {
 
-	str := flag.String("token", os.Getenv("BOT_TOKEN"), "Telegram bot token")
-	forwardMessagesToStr := flag.String("chatid", os.Getenv("CHAT_ID"), "Chat Id to forward messages to")
-	confirmReceive = *flag.Bool("confirmreceive", false, "Confirm message received to each user")
-	flag.Parse()
+	configParams := ParseConfigParams()
 
-	forwardMessagesTo = ParseInt(*forwardMessagesToStr)
+	forwardTo = &tele.Chat{ID: configParams.forwardMessagesTo}
+	confirmReceive = configParams.confirmReceive
 
-	log.Printf("Messages will be forwarded to: %d", forwardMessagesTo)
+	b = initializeBot(configParams.botToken)
+	log.Printf("Messages will be forwarded to: %d", configParams.forwardMessagesTo)
 
-	token := *str
+	if configParams.useLogger {
+		b.Use(middleware.Logger())
+	}
 
-	initializeBot(token)
+	//default handlers
+	b.Handle(tele.OnText, ForwardMessage)
+	b.Handle(tele.OnVoice, ForwardMessage)
+	b.Handle(tele.OnVideoNote, ForwardMessage)
+	b.Handle(tele.OnDocument, ForwardMessage)
+	b.Handle(tele.OnAnimation, ForwardMessage)
+	b.Handle(tele.OnLocation, ForwardMessage)
 
-	bot.Debug = true
+	//special handler for albums
+	b.Handle(tele.OnMedia, CheckForwardAlbum)
 
-	log.Printf("Authorized on account %s", bot.Self.UserName)
+	b.Start()
+}
 
-	u := botApi.NewUpdate(0)
-	u.Timeout = 60
+func CheckForwardAlbum(c tele.Context) error {
+	mediaGroupId := c.Message().AlbumID
+	if mediaGroupId != "" {
+		HandleAlbum(b, c, mediaGroupId)
+		return nil
+	}
+	return ForwardMessage(c)
+}
 
-	updates := bot.GetUpdatesChan(u)
-
-	for update := range updates {
-		if update.Message == nil { // ignore any non-Message updates
-			continue
-		}
-
-		if update.Message.Chat.ID == forwardMessagesTo {
-			// todo: handle replies
-			continue
-		}
-
-		forwardedMsg := botApi.NewForward(forwardMessagesTo, update.Message.From.ID, update.Message.MessageID)
-		if _, err := bot.Send(forwardedMsg); err != nil {
+func ForwardMessage(c tele.Context) error {
+	if _, err := b.Forward(forwardTo, c.Message()); err != nil {
+		LogToChat(err.Error())
+		return err
+	}
+	if confirmReceive {
+		err := c.Reply("Message received!")
+		if err != nil {
 			LogToChat(err.Error())
+			return err
 		}
+	}
+	return nil
+}
 
-		if confirmReceive {
-			SendReply(update.Message.Chat.ID, "Message received", update.Message.MessageID)
-		}
+func HandleAlbum(b *tele.Bot, c tele.Context, mediaGroupId string) {
+	media := c.Message().Media()
+	log.Printf("Adding file to arr: %s", media.MediaFile().FileID)
+
+	if messages, ok := mediaGroups[mediaGroupId]; ok {
+		mediaGroups[mediaGroupId] = append(messages, media)
+	} else {
+		mediaGroups[mediaGroupId] = []tele.Media{media}
+		var caption = fmt.Sprintf("<b>Forwarded from</b> <a href=\"tg://user?id=%d\">%s</a>\n<b>Message</b>:\n %s",
+			c.Message().Sender.ID,
+			c.Message().Sender.FirstName+c.Message().Sender.LastName,
+			c.Message().Text)
+
+		time.AfterFunc(time.Second, func() {
+			album := tele.Album{}
+			for i, media := range mediaGroups[mediaGroupId] {
+				fileId := media.MediaFile().FileID
+				log.Printf("Sending file %s", fileId)
+				var c = ""
+				if i == 0 {
+					c = caption
+				}
+				album = append(album, CreateMedia(media, c))
+			}
+			if _, err := b.SendAlbum(forwardTo, album, &tele.SendOptions{
+				ParseMode: "Html",
+			}); err != nil {
+				LogToChat(err.Error())
+			}
+		})
 	}
 }
 
-func SendReply(chatId int64, text string, replyTo ...int) {
-	// Create a new MessageConfig. We don't have text yet,
-	// so we leave it empty.
-	reply := botApi.NewMessage(chatId, text)
-	if len(replyTo) > 0 {
-		reply.ReplyToMessageID = replyTo[0]
+func CreateMedia(media tele.Media, caption string) tele.Inputtable {
+	switch media.MediaType() {
+	case "video":
+		return &tele.Video{File: *media.MediaFile(), Caption: caption}
+	case "photo":
+		return &tele.Photo{File: *media.MediaFile(), Caption: caption}
+	case "audio":
+		return &tele.Audio{File: *media.MediaFile(), Caption: caption}
+	default:
+		LogToChat(fmt.Sprintf("Type %s not supported for album", media.MediaType()))
 	}
-	if _, err := bot.Send(reply); err != nil {
-		LogToChat(err.Error())
+	return nil
+}
+
+func ParseConfigParams() ConfigParams {
+	str := flag.String("token", os.Getenv("BOT_TOKEN"), "Telegram bot token")
+	forwardMessagesToStr := flag.String("chatid", os.Getenv("CHAT_ID"), "Chat Id to forward messages to")
+	confirmReceive := flag.Bool("confirmreceive", false, "Confirm message received to each user")
+	useLogger := flag.Bool("uselogger", false, "Use verbose logger")
+	flag.Parse()
+
+	forwardMessagesTo := ParseInt(*forwardMessagesToStr)
+	config := ConfigParams{
+		botToken:          *str,
+		forwardMessagesTo: forwardMessagesTo,
+		confirmReceive:    *confirmReceive,
+		useLogger:         *useLogger,
 	}
+	return config
 }
 
 func ParseInt(val string) int64 {
@@ -93,10 +165,7 @@ func ParseInt(val string) int64 {
 }
 
 func LogToChat(msg string) {
-	// Create a new MessageConfig. We don't have text yet,
-	// so we leave it empty.
-	message := botApi.NewMessage(forwardMessagesTo, msg)
-	if _, err := bot.Send(message); err != nil {
+	if _, err := b.Send(forwardTo, msg); err != nil {
 		log.Print(err)
 	}
 }
