@@ -1,6 +1,13 @@
 ## Telegram bot for channel feedback
 
-This bot will forward any incoming messages to selected chat (private, group or channel)
+This bot will forward any incoming messages to selected chat (private, group or channel). 
+Chats with topics probably won't work for now.
+
+Features:
+- forward all incoming messages to a specific chat, channel or dm
+- forward media group as album instead of separate messages
+- reply to any incoming messages (including albums)
+- launch with `--confirmreceive` to let users know that their message is received
 
 ### Run using docker:
 
@@ -19,14 +26,14 @@ Clone this repository then
 Linux:
 ```shell
 cd tg-feedback-bot
-go build -o tg-feedback-bot main.go
+go build -o tg-feedback-bot
 tg-feedback-bot -token bot123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11 -chatid 123456
 ```
 
 Windows:
 ```powershell
 cd ./tg-feedback-bot
-go build -o tg-feedback-bot.exe main.go
+go build -o tg-feedback-bot.exe
 ./tg-feedback-bot.exe -token bot123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11 -chatid 123456
 ```
 

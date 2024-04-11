@@ -1,12 +1,10 @@
 package main
 
 import (
-	"flag"
-	"fmt"
+	"github.com/glebarez/sqlite"
 	"gopkg.in/telebot.v3/middleware"
+	"gorm.io/gorm"
 	"log"
-	"os"
-	"strconv"
 	"time"
 
 	tele "gopkg.in/telebot.v3"
@@ -14,16 +12,47 @@ import (
 
 var b *tele.Bot
 
+// chat we want to forward messages to
 var forwardTo *tele.Chat
+
+// do we need to reply with confirmation on each message
 var confirmReceive bool = false
 
-var mediaGroups = make(map[string][]tele.Media, 3)
+// Telegram bots receive albums as separate messages.
+// So to be able to forward them properly
+// we collect all incoming media group items
+// in a dictionary with media_group_id as key for each group
+var mediaGroups = make(map[string][]MediaGroupItem, 3)
 
-type ConfigParams struct {
-	botToken          string
-	forwardMessagesTo int64
-	confirmReceive    bool
-	useLogger         bool
+func main() {
+
+	configParams := parseConfigParams()
+
+	forwardTo = &tele.Chat{ID: configParams.forwardMessagesTo}
+	confirmReceive = configParams.confirmReceive
+
+	b = initializeBot(configParams.botToken)
+	log.Printf("Messages will be forwarded to: %d", configParams.forwardMessagesTo)
+
+	if configParams.useLogger {
+		b.Use(middleware.Logger())
+	}
+
+	initializeSqlite()
+
+	//default handlers
+	b.Handle(tele.OnText, HandleMessage)
+	b.Handle(tele.OnVoice, HandleMessage)
+	b.Handle(tele.OnVideoNote, HandleMessage)
+	b.Handle(tele.OnDocument, HandleMessage)
+	b.Handle(tele.OnAnimation, HandleMessage)
+	b.Handle(tele.OnLocation, HandleMessage)
+	b.Handle(tele.OnSticker, HandleMessage)
+
+	//special handler for albums
+	b.Handle(tele.OnMedia, CheckForwardAlbum)
+
+	b.Start()
 }
 
 func initializeBot(token string) *tele.Bot {
@@ -40,132 +69,16 @@ func initializeBot(token string) *tele.Bot {
 	return bot
 }
 
-func main() {
-
-	configParams := ParseConfigParams()
-
-	forwardTo = &tele.Chat{ID: configParams.forwardMessagesTo}
-	confirmReceive = configParams.confirmReceive
-
-	b = initializeBot(configParams.botToken)
-	log.Printf("Messages will be forwarded to: %d", configParams.forwardMessagesTo)
-
-	if configParams.useLogger {
-		b.Use(middleware.Logger())
-	}
-
-	//default handlers
-	b.Handle(tele.OnText, ForwardMessage)
-	b.Handle(tele.OnVoice, ForwardMessage)
-	b.Handle(tele.OnVideoNote, ForwardMessage)
-	b.Handle(tele.OnDocument, ForwardMessage)
-	b.Handle(tele.OnAnimation, ForwardMessage)
-	b.Handle(tele.OnLocation, ForwardMessage)
-
-	//special handler for albums
-	b.Handle(tele.OnMedia, CheckForwardAlbum)
-
-	b.Start()
-}
-
-func CheckForwardAlbum(c tele.Context) error {
-	mediaGroupId := c.Message().AlbumID
-	if mediaGroupId != "" {
-		HandleAlbum(b, c, mediaGroupId)
-		return nil
-	}
-	return ForwardMessage(c)
-}
-
-func ForwardMessage(c tele.Context) error {
-	if _, err := b.Forward(forwardTo, c.Message()); err != nil {
-		LogToChat(err.Error())
-		return err
-	}
-	if confirmReceive {
-		err := c.Reply("Message received!")
-		if err != nil {
-			LogToChat(err.Error())
-			return err
-		}
-	}
-	return nil
-}
-
-func HandleAlbum(b *tele.Bot, c tele.Context, mediaGroupId string) {
-	media := c.Message().Media()
-	log.Printf("Adding file to arr: %s", media.MediaFile().FileID)
-
-	if messages, ok := mediaGroups[mediaGroupId]; ok {
-		mediaGroups[mediaGroupId] = append(messages, media)
-	} else {
-		mediaGroups[mediaGroupId] = []tele.Media{media}
-		var caption = fmt.Sprintf("<b>Forwarded from</b> <a href=\"tg://user?id=%d\">%s</a>\n<b>Message</b>:\n %s",
-			c.Message().Sender.ID,
-			c.Message().Sender.FirstName+c.Message().Sender.LastName,
-			c.Message().Text)
-
-		time.AfterFunc(time.Second, func() {
-			album := tele.Album{}
-			for i, media := range mediaGroups[mediaGroupId] {
-				fileId := media.MediaFile().FileID
-				log.Printf("Sending file %s", fileId)
-				var c = ""
-				if i == 0 {
-					c = caption
-				}
-				album = append(album, CreateMedia(media, c))
-			}
-			if _, err := b.SendAlbum(forwardTo, album, &tele.SendOptions{
-				ParseMode: "Html",
-			}); err != nil {
-				LogToChat(err.Error())
-			}
-		})
-	}
-}
-
-func CreateMedia(media tele.Media, caption string) tele.Inputtable {
-	switch media.MediaType() {
-	case "video":
-		return &tele.Video{File: *media.MediaFile(), Caption: caption}
-	case "photo":
-		return &tele.Photo{File: *media.MediaFile(), Caption: caption}
-	case "audio":
-		return &tele.Audio{File: *media.MediaFile(), Caption: caption}
-	default:
-		LogToChat(fmt.Sprintf("Type %s not supported for album", media.MediaType()))
-	}
-	return nil
-}
-
-func ParseConfigParams() ConfigParams {
-	str := flag.String("token", os.Getenv("BOT_TOKEN"), "Telegram bot token")
-	forwardMessagesToStr := flag.String("chatid", os.Getenv("CHAT_ID"), "Chat Id to forward messages to")
-	confirmReceive := flag.Bool("confirmreceive", false, "Confirm message received to each user")
-	useLogger := flag.Bool("uselogger", false, "Use verbose logger")
-	flag.Parse()
-
-	forwardMessagesTo := ParseInt(*forwardMessagesToStr)
-	config := ConfigParams{
-		botToken:          *str,
-		forwardMessagesTo: forwardMessagesTo,
-		confirmReceive:    *confirmReceive,
-		useLogger:         *useLogger,
-	}
-	return config
-}
-
-func ParseInt(val string) int64 {
-	chatid, err := strconv.ParseInt(val, 10, 64)
+func initializeSqlite() {
+	var err error
+	db, err = gorm.Open(sqlite.Open("app.db"), &gorm.Config{})
 	if err != nil {
-		log.Panic(err)
+		logToChat("Failed to connect database, replies will be unavailable" + "\r\n" + err.Error())
 	}
-	return chatid
-}
 
-func LogToChat(msg string) {
-	if _, err := b.Send(forwardTo, msg); err != nil {
-		log.Print(err)
+	// Migrate the schema
+	err = db.AutoMigrate(&InboxMessage{})
+	if err != nil {
+		logToChat("Migration failed, replies will be unavailable" + "\r\n" + err.Error())
 	}
 }

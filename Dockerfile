@@ -2,7 +2,7 @@ FROM golang:alpine AS builder
 WORKDIR /build
 ADD go.mod .
 COPY . .
-RUN go build -o tg-feedback-bot main.go
+RUN go build -o tg-feedback-bot
 FROM alpine
 WORKDIR /build
 COPY --from=builder /build/tg-feedback-bot /build/tg-feedback-bot
