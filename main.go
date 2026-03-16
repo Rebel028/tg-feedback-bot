@@ -1,11 +1,12 @@
 package main
 
 import (
+	"log"
+	"time"
+
 	"github.com/glebarez/sqlite"
 	"gopkg.in/telebot.v3/middleware"
 	"gorm.io/gorm"
-	"log"
-	"time"
 
 	tele "gopkg.in/telebot.v3"
 )
@@ -48,6 +49,7 @@ func main() {
 	b.Handle(tele.OnAnimation, HandleMessage)
 	b.Handle(tele.OnLocation, HandleMessage)
 	b.Handle(tele.OnSticker, HandleMessage)
+	b.Handle(tele.OnEdited, HandleMessageEdited)
 
 	//special handler for albums
 	b.Handle(tele.OnMedia, CheckForwardAlbum)

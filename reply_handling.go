@@ -2,12 +2,13 @@ package main
 
 import (
 	"fmt"
-	tele "gopkg.in/telebot.v3"
-	"gorm.io/gorm"
 	"log"
 	"sort"
 	"strings"
 	"time"
+
+	tele "gopkg.in/telebot.v3"
+	"gorm.io/gorm"
 )
 
 var db *gorm.DB
@@ -189,4 +190,23 @@ func makeSendable(message *tele.Message) interface{} {
 		return message.Text
 	}
 	return message.Media()
+}
+
+func HandleMessageEdited(context tele.Context) error {
+	editedMessage := context.Message()
+
+	// only handle edits from non-admin users
+	if editedMessage.Chat.ID == forwardTo.ID {
+		return nil
+	}
+
+	sender := editedMessage.Sender
+	username := "@" + sender.Username
+	if username == "" {
+		username = sender.FirstName + " " + sender.LastName
+	}
+
+	text := fmt.Sprintf("%s UPD:\n%s", username, editedMessage.Text)
+	_, err := b.Send(forwardTo, text)
+	return err
 }

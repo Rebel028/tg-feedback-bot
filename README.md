@@ -19,7 +19,7 @@ docker run -d --name tg-feedback-bot --pull=always \
 ```
 
 ### Run with Go
-**Prerequisites:** [Go 1.19](https://go.dev/dl/)
+**Prerequisites:** [Go 1.19](https://go.dev/dl/)+
 
 Clone this repository then
 
