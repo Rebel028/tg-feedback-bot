@@ -8,6 +8,7 @@ import (
 	"time"
 
 	tele "gopkg.in/telebot.v3"
+	"gopkg.in/telebot.v3/react"
 	"gorm.io/gorm"
 )
 
@@ -19,7 +20,7 @@ func HandleMessage(c tele.Context) error {
 
 	// if message is NOT from an admin(s) - forward it
 	if receivedMessage.Chat.ID != forwardTo.ID {
-		_, err := forwardMessage(b, forwardTo, receivedMessage)
+		_, err := forwardMessage(c)
 		if err != nil {
 			return err
 		}
@@ -71,16 +72,9 @@ func CheckForwardAlbum(c tele.Context) error {
 }
 
 func ForwardMessage(c tele.Context) error {
-	if _, err := forwardMessage(b, forwardTo, c.Message()); err != nil {
+	if _, err := forwardMessage(c); err != nil {
 		logToChat(err.Error())
 		return err
-	}
-	if confirmReceive {
-		err := c.Reply("Message received!")
-		if err != nil {
-			logToChat(err.Error())
-			return err
-		}
 	}
 	return nil
 }
@@ -156,23 +150,22 @@ func HandleAlbum(b *tele.Bot, c tele.Context, mediaGroupId string) {
 			}
 
 			if confirmReceive {
-				err := c.Reply("Message received!")
-				if err != nil {
-					logToChat(err.Error())
-					return
-				}
+				confirmReceived(receivedAlbumPartMessage)
 			}
 		})
 	}
 }
 
-func forwardMessage(b *tele.Bot, forwardTo *tele.Chat, receivedMessage *tele.Message) (*tele.Message, error) {
+func forwardMessage(c tele.Context) (*tele.Message, error) {
+	receivedMessage := c.Message()
 	forwardedMsg, err := b.Forward(forwardTo, receivedMessage)
 	if err != nil {
 		logToChat(err.Error())
 		return nil, err
 	}
-
+	if confirmReceive {
+		confirmReceived(receivedMessage)
+	}
 	if db != nil {
 		//create a record for received msg
 		db.Create(&InboxMessage{
@@ -183,6 +176,19 @@ func forwardMessage(b *tele.Bot, forwardTo *tele.Chat, receivedMessage *tele.Mes
 	}
 
 	return forwardedMsg, err
+}
+
+func confirmReceived(receivedMessage *tele.Message) {
+	//fixed in next versions
+	reaction := react.React(react.Reaction{Emoji: "👍", Type: "emoji"})
+	err := b.React(receivedMessage.Chat, receivedMessage, reaction)
+	if err != nil {
+		logToChat(err.Error())
+		_, err := b.Reply(receivedMessage, "Message received!")
+		if err != nil {
+			logToChat(err.Error())
+		}
+	}
 }
 
 func makeSendable(message *tele.Message) interface{} {
